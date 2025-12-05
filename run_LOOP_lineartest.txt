@@ -1,0 +1,43 @@
+0.5: compile mascot-party.x:
+make -j mascot-party.x
+
+1. set up the function in Programs/Source/loop_unrolled_linear.mpc
+
+2. Compile:
+#custom:
+N=8192 THREADS=4 LOOP=5 ./compile.py -F 32 loop_unrolled_linear
+
+
+
+3.set party input. Example:
+
+python3 gen_linear_inputs.py --n 2048
+
+3.5:
+generate preprocessed data
+#2048
+./Fake-Offline.x 2 -lgp 32 -S 16 -p loop_unrolled_linear
+
+4.Run:
+/////with param
+
+# Terminal A
+
+"-v" is for setup time; FE SEC = front end compile time, meansured in shell script and passed in the commandline for CSV gen.
+#4096
+# Terminal A
+/usr/bin/time -l env BENCH_INPUT_N="8192" ./mascot-party.x -v -F -N 2 -S 16 -lgp 32 -h 127.0.0.1 -pn 14000 0 loop_unrolled_linear
+# Terminal B
+/usr/bin/time -l env BENCH_INPUT_N="8192" ./mascot-party.x -v -F -N 2 -S 16 -lgp 32 -h 127.0.0.1 -pn 14000 1 loop_unrolled_linear
+
+4.run test in shell:(run_bench.sh, just bench one input size)
+
+chmod +x run_bench.sh
+./run_bench.sh
+
+
+
+
+#bench all input at once
+chmod +x run_looped_bench_all.sh
+./run_looped_bench_all.sh

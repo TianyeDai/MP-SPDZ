@@ -1,0 +1,52 @@
+# test_linear_unrolled_3.mpc
+from Compiler.types import sint, Array, cint
+from Compiler.library import for_range, for_range_multithread
+import os
+
+def _get_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except Exception:
+        return default
+
+n = _get_int("N", 4096)
+THREADS = max(1, _get_int("THREADS", 2))
+
+# Inputs: x from P0; W,b from P1
+x = Array(n, sint);    x.input_from(0)
+W = sint.Matrix(n, n); W.input_from(1)
+b = Array(n, sint);    b.input_from(1)
+
+# x as n×1 column
+x_col = sint.Matrix(n, 1)
+@for_range_multithread(THREADS, 1, n)
+def _(i):
+    x_col[i][0] = x[i]
+
+def lin_once(x_matrix):
+    y_col = W.dot(x_matrix, n_threads=THREADS)
+    y_out = Array(n, sint)
+    @for_range_multithread(THREADS, 1, n)
+    def _(i):
+        y_out[i] = y_col[i][0] + b[i]
+    return y_out
+
+# Execute the same linear layer three independent times
+y1 = lin_once(x_col)
+y2 = lin_once(x_col)
+y3 = lin_once(x_col)
+
+def sum_array(a):
+    s = sint(0)
+    @for_range(n)
+    def _(i):
+        s.update(s + a[i])
+    return s
+
+# Keep all three executions live on the tape
+chk = sum_array(y1) + sum_array(y2) + sum_array(y3)
+chk_open = chk.reveal()
+
+# Optionally also open one full output vector (e.g., y3)
+y_open = Array(n, cint)
+y_open.assign_vector(y3.reveal())

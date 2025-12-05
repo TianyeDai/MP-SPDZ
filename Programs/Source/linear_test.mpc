@@ -1,0 +1,37 @@
+from Compiler.types import sint, Array, cint
+from Compiler.library import for_range_multithread
+import os
+
+# -------- compile-time config (env) ----------
+def _get_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except Exception:
+        return default
+
+n = _get_int("N", 4096)             # export N=8192 to change
+THREADS = max(1, _get_int("THREADS", 2))  # export THREADS=8 to change
+# --------------------------------------------
+
+x = Array(n, sint);    x.input_from(0)
+W = sint.Matrix(n, n); W.input_from(1)
+b = Array(n, sint);    b.input_from(1)
+
+# Build x as an n×1 column matrix (parallel)
+x_col = sint.Matrix(n, 1)
+@for_range_multithread(THREADS, 1, n)
+def _(i):
+    x_col[i][0] = x[i]
+
+# Multithreaded matmul (emits multiple tapes)
+y_col = W.dot(x_col, n_threads=THREADS)
+
+# y = W x + b (parallel)
+y = Array(n, sint)
+@for_range_multithread(THREADS, 1, n)
+def _(i):
+    y[i] = y_col[i][0] + b[i]
+
+# Force completion so DCE won’t remove it
+y_open = Array(n, cint)
+y_open.assign_vector(y.reveal())

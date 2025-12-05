@@ -1,0 +1,29 @@
+from Compiler.types import sint, Array
+from Compiler.library import print_ln
+
+# Dimensions (edit as needed)
+n_in = 3
+n_out = 2
+
+# x from party 0
+x = Array(n_in, sint)
+for i in range(n_in):
+    x[i] = sint.get_input_from(0)
+
+# W (n_out x n_in) and b from party 1
+W = [[sint.get_input_from(1) for _ in range(n_in)] for _ in range(n_out)]
+b = Array(n_out, sint)
+for i in range(n_out):
+    b[i] = sint.get_input_from(1)
+
+# y = W x + b
+y = Array(n_out, sint)
+for i in range(n_out):
+    acc = sint(0)
+    for j in range(n_in):
+        acc += W[i][j] * x[j]
+    y[i] = acc + b[i]
+
+# Print results: reveal secrets before printing
+for i in range(n_out):
+    print_ln('y[%s]=%s', i, y[i].reveal())
