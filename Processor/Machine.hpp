@@ -21,6 +21,16 @@
 #include <string>
 #include <fstream>
 #include <pthread.h>
+
+
+#include <sys/resource.h>   // getrusage()
+#include <sys/stat.h>       // file size test (optional)
+#include <iomanip>          // std::setprecision
+#include <regex>    // std::regex, std::smatch, std::regex_search
+#include <chrono>   // std::chrono::system_clock, duration_cast, etc.
+
+
+
 using namespace std;
 
 template<class sint, class sgf2n>
@@ -553,8 +563,32 @@ void Machine<sint, sgf2n>::run(const string& progname)
 {
   prepare(progname);
 
+  //NEW
+  // ---------- ensure CSV header exists before any rows are written ----------
+  const std::string csv_path = "mp-spdz-ssh.csv";
+  const std::string header_line =
+      "timestamp,progname,input_size,party_id,num_parties,"
+      "frontend_wall_sec, setup_wall_sec,"                         // <--- NEW COLUMN
+      "online_wall_sec,process_cpu_sec,user_cpu_sec,sys_cpu_sec,"
+      "mb_sent_party,mb_sent_global,rounds,compile_threads";
+
+  auto file_has_header = [&](const std::string& path) -> bool {
+      std::ifstream in(path);
+      if (!in.good()) return false;
+      std::string first;
+      if (!std::getline(in, first)) return false;
+      return first.rfind(header_line, 0) == 0; // starts with header
+  };
+
+  if (N.my_num() == 0 && !file_has_header(csv_path)) {
+      std::ofstream csv(csv_path, std::ios::app);
+      csv << header_line << "\n";
+  }
+  // -------------------------------------------------------------------------
+  double setup_wall_seconds = 0.0;
   if (opts.verbose and setup_timer.is_running())
     {
+      setup_wall_seconds = setup_timer.elapsed();    // <--- capture before stop NEW
       cerr << "Setup took " << setup_timer.elapsed() << " seconds." << endl;
       setup_timer.stop();
     }
@@ -609,7 +643,94 @@ void Machine<sint, sgf2n>::run(const string& progname)
       cerr << endl;
     }
 
+  //NEW ---- ADD: capture online-only wall time *before* print_timers() erases timer[0]
+  double online_wall_seconds = timer[0].elapsed();
+
   print_timers();
+
+
+  // ---- ADD: compute/collect more timing + comm stats and append to CSV
+  // Process CPU timing already measured as 'proc_timer' above.
+  double process_cpu_seconds = proc_timer.elapsed();
+
+  // POSIX user/system CPU time
+  rusage usage{};
+  getrusage(RUSAGE_SELF, &usage);
+  double user_cpu_seconds  = usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1e6;
+  double sys_cpu_seconds   = usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1e6;
+
+  // Communication totals (bytes and rounds)
+  // 'comm_stats' is already available a few lines above:
+  //   NamedCommStats& comm_stats = res.second;
+  size_t total_rounds = 0;
+  for (auto& kv : comm_stats)
+      total_rounds += kv.second.rounds;
+  double mb_sent_this_party = comm_stats.sent / 1e6;
+
+  // Optional: global MB (sum over parties) like print_comm() does.
+  // We’ll reproduce a compact version here without extra broadcast printing.
+  // If you prefer exactly the same as print_comm(), skip global and keep per-party only.
+  size_t global_bytes_sent = 0;
+  {
+      Bundle<octetStream> bundle(*P);
+      bundle.mine.store(comm_stats.sent);
+      P->Broadcast_Receive_no_stats(bundle);
+      for (auto& os : bundle)
+          global_bytes_sent += os.get_int(8);
+  }
+  double mb_sent_global = global_bytes_sent / 1e6;
+
+  // ---- parse input size from program name (e.g., "linear4096" -> 4096)
+  int input_size = 0;
+  if (const char* env_n = std::getenv("BENCH_INPUT_N")) {
+    try {
+      input_size = std::stoi(env_n);
+    } catch (...) {
+      input_size = 0;
+    }
+  }
+
+  // Front-end (compile.py) wall time passed by the script
+  double frontend_wall_seconds = 0.0;
+  if (const char* fe = std::getenv("BENCH_FE_SEC")) {
+    try { frontend_wall_seconds = std::stod(fe); } catch (...) { frontend_wall_seconds = 0.0; }
+  }
+
+  int compile_threads = 0;
+  if (const char* bt = std::getenv("BENCH_THREADS")) {
+    try { compile_threads = std::stoi(bt); } catch (...) { compile_threads = 0; }
+  }
+
+  // Append one row
+  {
+      const std::string csv_path = "mp-spdz-ssh.csv";  // reuse same path
+      std::ofstream csv(csv_path, std::ios::app);
+      csv.setf(std::ios::fixed);
+      csv << std::setprecision(6);
+
+      auto now = std::chrono::system_clock::now();
+      auto epoch = std::chrono::duration_cast<std::chrono::seconds>(
+                      now.time_since_epoch()).count();
+
+      csv
+        << epoch
+        << "," << this->progname
+        << "," << input_size
+        << "," << N.my_num()
+        << "," << N.num_players()
+        << "," << frontend_wall_seconds
+        << "," << setup_wall_seconds
+        << "," << online_wall_seconds
+        << "," << process_cpu_seconds
+        << "," << user_cpu_seconds
+        << "," << sys_cpu_seconds
+        << "," << mb_sent_this_party
+        << "," << mb_sent_global
+        << "," << total_rounds
+        << "," << compile_threads
+        << "\n";
+  }
+
 
   if (sint::is_real)
     this->print_comm(*this->P, comm_stats);

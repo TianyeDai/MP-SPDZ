@@ -1388,17 +1388,6 @@ class cgf2n(_clear, _gf2n):
     reg_type = 'cg'
 
     @classmethod
-    def write_to_socket(self, client_id, values,
-                        message_type=ClientMessageType.NoType):
-        """ Send a list of values to a client by converting to 64-bit regint.
-
-        :param client_id: Client id (regint)
-        :param values: list of cgf2n
-
-        """
-        regint.write_to_socket(client_id, [regint.conv(x) for x in values])
-
-    @classmethod
     def bit_compose(cls, bits, step=None):
         r""" Clear :math:`\mathrm{GF}(2^n)` bit composition.
 
@@ -2007,12 +1996,7 @@ class personal(Tape._no_truth):
         return self._v
 
     def _div_san(self):
-        return self._op_san(1)
-
-    def _op_san(self, default=0):
-        return self._v.conv(
-            (library.get_player_id() == self.player)._v).if_else(
-                self._v, default)
+        return self._v.conv((library.get_player_id() == self.player)._v).if_else(self._v, 1)
 
     def __setitem__(self, index, value):
         self._san(value)
@@ -4720,7 +4704,7 @@ class _fix(_single):
 
     @classmethod
     def coerce(cls, other, equal_precision=None):
-        if isinstance(other, (_fix, cls.clear_type, _vectorizable)):
+        if isinstance(other, (_fix, cls.clear_type)):
             return other
         else:
             return cls.conv(other)
@@ -4804,9 +4788,6 @@ class _fix(_single):
 
     def __getitem__(self, index):
         return self._new(self.v[index])
-
-    def __iter__(self):
-        return (self._new(x) for x in self.v)
 
     @vectorize 
     def add(self, other):
@@ -5935,18 +5916,6 @@ class _vectorizable:
 
         """
         self.value_type.reveal_to_clients(clients, [self.get_vector()])
-
-    def reveal_to_socket_by_party(self, client_id, n_parties=None):
-        """ Reveal i-th part to a specific client socket on party i.
-
-        :param client_id: regint
-        :param n_parties: number of parties (default: first dimension length)
-
-        """
-        n_parties = n_parties or len(self)
-        tmp = sum(self.get_part_vector(base=i, size=1).reveal_to(i)._op_san()
-                  for i in range(n_parties))
-        tmp.write_to_socket(client_id, tmp)
 
 class Array(_vectorizable):
     """
