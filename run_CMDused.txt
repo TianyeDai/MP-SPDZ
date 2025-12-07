@@ -54,5 +54,10 @@ chmod +x run_bench_all.sh
 ./run_bench_all.sh
 
 
+
+
+
+
+
 chmod +x run_script_npc.sh
 ./run_script_npc.sh
