@@ -41,3 +41,8 @@ chmod +x run_bench.sh
 #bench all input at once
 chmod +x run_looped_bench_all.sh
 ./run_looped_bench_all.sh
+
+
+
+chmod +x run_conv_test.sh
+./run_conv_test.sh

@@ -1,0 +1,35 @@
+from Compiler.types import sint, Array, cint
+from Compiler.library import for_range_multithread
+import os
+
+def _get_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except Exception:
+        return default
+
+A_ROWS  = _get_int("A_ROWS", 8)
+A_COLS  = _get_int("A_COLS", 8)
+W_DIM   = _get_int("W_DIM",  2)
+THREADS = max(1, _get_int("THREADS", 2))
+
+OUT_R = A_ROWS - W_DIM + 1
+OUT_C = A_COLS - W_DIM + 1
+OUT_N = OUT_R * OUT_C
+
+A = sint.Matrix(A_ROWS, A_COLS); A.input_from(0)
+W = sint.Matrix(W_DIM,  W_DIM ); W.input_from(1)
+
+y = Array(OUT_N, sint)
+
+@for_range_multithread(THREADS, 0, OUT_R)
+def _(r):
+    for c in range(OUT_C):
+        acc = sint(0)
+        for i in range(W_DIM):
+            for j in range(W_DIM):
+                acc += A[r + i][c + j] * W[i][j]
+        y[r * OUT_C + c] = acc
+
+y_open = Array(OUT_N, cint)
+y_open.assign_vector(y.reveal())

@@ -16,17 +16,23 @@ JOBS="${JOBS:-$({
   command -v getconf >/dev/null 2>&1 && getconf _NPROCESSORS_ONLN 2>/dev/null || \
   sysctl -n hw.ncpu 2>/dev/null || echo 4;
 })}"
-echo "[0/5] Build runtime (mascot-party.x) with ${JOBS} jobs"
-make -j "${JOBS}" mascot-party.x
+
+echo "[0/5] Clean + build runtime with INSECURE preprocessing enabled"
+make clean
+
+# IMPORTANT FIX:
+# MP-SPDZ commonly expects user-added flags via MY_CXXFLAGS rather than CXXFLAGS.
+# -B forces a rebuild to avoid reusing a non-INSECURE Fake-Offline binary.
+make -B -j "${JOBS}" Fake-Offline.x mascot-party.x MY_CXXFLAGS="-DINSECURE"
 
 ########################################
 # Config (override with env vars)
 ########################################
-PROGRAM="${PROGRAM:-linear_test}"              # name passed to compile.py and runtime
-SIZES_STR="${SIZES:-2048}"                     # comma-separated list of input sizes
-REPEAT="${REPEAT:-1}"                          # repetitions per (N,THREAD)
-THREAD_SET_STR="${THREAD_SET:-1,2}"  # set of thread counts to test
-PARTIES_STR="${PARTIES:-4}"                    # comma-separated list, e.g. "2,3,4"
+PROGRAM="${PROGRAM:-linear_test}"                 # name passed to compile.py and runtime
+SIZES_STR="${SIZES:-2048,4096,8192}"              # comma-separated list of input sizes
+REPEAT="${REPEAT:-1}"                             # repetitions per (N,THREAD)
+THREAD_SET_STR="${THREAD_SET:-1,2,4,8,16,32,64}"  # set of thread counts to test
+PARTIES_STR="${PARTIES:-2,3,4,5,6}"               # comma-separated list, e.g. "2,3,4"
 
 # Exact prime p = 4_294_967_291
 PRIME="${PRIME:-4294967291}"   # 4_294_967_291
@@ -174,6 +180,16 @@ ensure_dirs
 
 # Export PRIME and INT_BITS so the Python helper sees them
 export PRIME INT_BITS
+
+# Safety guard
+if [[ ! -x ./mascot-party.x ]]; then
+  echo "ERROR: mascot-party.x not found. Build failed?"
+  exit 1
+fi
+if [[ ! -x ./Fake-Offline.x ]]; then
+  echo "ERROR: Fake-Offline.x not found. Build failed?"
+  exit 1
+fi
 
 for n in "${SIZES[@]}"; do
   echo "=== N = ${n} ====================================================="

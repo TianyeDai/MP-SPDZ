@@ -18,15 +18,15 @@ JOBS="${JOBS:-$({
 })}"
 echo "[0/5] Build runtime (mascot-party.x) with ${JOBS} jobs"
 make -j "${JOBS}" mascot-party.x
-
+make -j -DINSECURE Fake-Offline.x
 ########################################
 # Config (override with env vars)
 ########################################
 PROGRAM="${PROGRAM:-linear_test}"              # name passed to compile.py and runtime
-SIZES_STR="${SIZES:-2048}"                     # comma-separated list of input sizes
+SIZES_STR="${SIZES:-2048,4096,8192}"                     # comma-separated list of input sizes
 REPEAT="${REPEAT:-1}"                          # repetitions per (N,THREAD)
-THREAD_SET_STR="${THREAD_SET:-1,2}"  # set of thread counts to test
-PARTIES_STR="${PARTIES:-4}"                    # comma-separated list, e.g. "2,3,4"
+THREAD_SET_STR="${THREAD_SET:-1,2,4,8,16,32,64}"  # set of thread counts to test
+PARTIES_STR="${PARTIES:-2,3,4,5,6}"                    # comma-separated list, e.g. "2,3,4"
 
 # Exact prime p = 4_294_967_291
 PRIME="${PRIME:-4294967291}"   # 4_294_967_291
@@ -87,7 +87,7 @@ env['N'] = n
 env['THREADS'] = threads
 prime = env.get('PRIME')
 
-# Build compile.py command: ./compile.py -P <prime> -F <bits> <prog>
+# Build compile.py command: ./compile.py -DINSECURE -P <prime> -F <bits> <prog>
 cmd = ["./compile.py"]
 if prime:
     cmd += ["-P", prime]
