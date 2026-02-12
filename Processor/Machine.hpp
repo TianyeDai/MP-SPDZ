@@ -565,7 +565,7 @@ void Machine<sint, sgf2n>::run(const string& progname)
 
   //NEW
   // ---------- ensure CSV header exists before any rows are written ----------
-  const std::string csv_path = "conv_result.csv";
+  const std::string csv_path = "activation_result.csv";
   const std::string header_line =
       "timestamp,progname,input_size,party_id,num_parties,"
       "frontend_wall_sec, setup_wall_sec,"                         // <--- NEW COLUMN
@@ -703,7 +703,7 @@ void Machine<sint, sgf2n>::run(const string& progname)
 
   // Append one row
   {
-      const std::string csv_path = "conv_result.csv";  // reuse same path
+      const std::string csv_path = "activation_result.csv";  // reuse same path
       std::ofstream csv(csv_path, std::ios::app);
       csv.setf(std::ios::fixed);
       csv << std::setprecision(6);

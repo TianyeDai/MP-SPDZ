@@ -1,0 +1,37 @@
+# activation_ltz_vec.mpc
+# Vectorized LTZ (less-than-zero) on a secret vector x of length LEN.
+#
+# Inputs:
+#   Party 0 provides LEN signed integers (one per line or whitespace-separated).
+# Output:
+#   Reveals LEN integers in {0,1} indicating (x[i] < 0).
+
+from Compiler.types import sint, Array, cint
+from Compiler.library import for_range_multithread
+import os
+
+def _get_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except Exception:
+        return default
+
+LEN     = _get_int("LEN", 1024)
+THREADS = max(1, _get_int("THREADS", 2))
+
+# Secret input vector
+x = Array(LEN, sint)
+x.input_from(0)
+
+# Secret output vector (0/1)
+y = Array(LEN, sint)
+
+@for_range_multithread(THREADS, 1, LEN)
+def _(i):
+    # In MP-SPDZ, comparisons on sint yield a secret 0/1 (bit-like) value.
+    # Store as sint for easy reveal.
+    y[i] = x[i] < 0
+
+# Reveal for sanity / output capture
+y_open = Array(LEN, cint)
+y_open.assign_vector(y.reveal())

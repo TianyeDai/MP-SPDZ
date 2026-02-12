@@ -22,7 +22,7 @@ W = sint.Matrix(W_DIM,  W_DIM ); W.input_from(1)
 
 y = Array(OUT_N, sint)
 
-@for_range_multithread(THREADS, 0, OUT_R)
+@for_range_multithread(THREADS, 1, OUT_R)
 def _(r):
     for c in range(OUT_C):
         acc = sint(0)

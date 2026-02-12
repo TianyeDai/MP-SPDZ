@@ -61,3 +61,7 @@ chmod +x run_bench_all.sh
 
 chmod +x run_script_npc.sh
 ./run_script_npc.sh
+
+
+chmod +x run_activation.sh
+./run_activation.sh
