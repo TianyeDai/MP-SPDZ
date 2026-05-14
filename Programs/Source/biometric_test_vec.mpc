@@ -1,20 +1,8 @@
-# biometric_test.mpc
+# biometric_test_vec.mpc
 #
-# Squared-Euclidean-distance biometric matching that mirrors the C frontend
-# (tests/biometric/inputs/biometric.c in the user's other SPDZ pipeline).
-#
-# Structure -- a literal nested loop, just like the C code:
-#
-#   for (i = 0; i < N; ++i) {                                  outer (threaded)
-#       sum = 0;
-#       for (j = 0; j < D; ++j) {                              inner
-#           diff = S[i*D + j] - C[j];
-#           sum += diff * diff;
-#       }
-#       sums[i] = sum;
-#   }
-#   // then a sequential argmin pass over sums[0..N-1] -> (min_sum, min_idx)
-#   return min_idx + min_sum;
+# Compare with biometric_test.mpc, which keeps the literal nested scalar
+# loop (and pays a ~10x rounds penalty because the loop-carried `sum +=`
+# dependency forces sequential execution of the inner D iterations).
 #
 # Inputs:
 #   Party 0  ->  Player-Data/Input-P0-0  : probe vector C  (D values)
@@ -22,10 +10,10 @@
 #
 # Compile-time config (env vars):
 #   N        -- template count *and* dimension; the workload is square (N == D)
-#   THREADS  -- number of compute threads for the OUTER per-template loop
+#   THREADS  -- number of compute threads for the outer per-template loop
 
-from Compiler.types import sint, Array, cint, MultiArray, MemValue
-from Compiler.library import for_range_multithread, for_range_opt, print_ln
+from Compiler.types import sint, Array, cint, MultiArray
+from Compiler.library import for_range_multithread, print_ln
 from Compiler import util
 import os
 
@@ -54,25 +42,23 @@ S = sint.Matrix(N_TPL, D_DIM)
 S.input_from(1)
 
 # ---------------------------------------------------------------------------
-# Nested loop: outer over templates (threaded), inner over dimensions.
+# Per-template squared distances (parallel across templates).
+#
+#   diff = S[i][:] - C[:]          # one vectorized subtract, length D
+#   sums[i] = <diff, diff>         # one fused dot product
+
 # ---------------------------------------------------------------------------
 sums = sint.Array(N_TPL)
 
 
 @for_range_multithread(THREADS, 1, N_TPL)
 def _(i):
-    acc = MemValue(sint(0))           # uint32_t sum = 0;
-
-    @for_range_opt(D_DIM)
-    def _(j):
-        diff = S[i][j] - C[j]         # int32_t diff = S[i*D+j] - C[j];
-        acc.write(acc.read() + diff * diff)   # sum += diff * diff;
-
-    sums[i] = acc.read()              # store this template's sum
+    diff = S.get_part_vector(i, 1) - C.get_vector()
+    sums[i] = sint.dot_product(diff, diff)
 
 
 # ---------------------------------------------------------------------------
- -- mirrors C's `if (sum < min_sum) { ... }` chain.
+# frontend's `if (sum < min_sum) { min_sum = sum; min_idx = i; }` chain.
 # ---------------------------------------------------------------------------
 min_sum = sums[0]
 min_idx = sint(0)
@@ -87,4 +73,4 @@ for i in range(1, N_TPL):
 result = min_sum + min_idx
 y_open = Array(1, cint)
 y_open[0] = result.reveal()
-print_ln('biometric result (min_idx + min_sum) = %s', y_open[0])
+

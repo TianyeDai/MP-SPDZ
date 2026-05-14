@@ -28,7 +28,7 @@ make -j "${JOBS}" mascot-party.x
 ########################################
 # Config (override with env vars)
 ########################################
-PROGRAM="${PROGRAM:-biometric_test}"           # Programs/Source/biometric_test.mpc
+PROGRAM="${PROGRAM:-biometric_test_vec}"           # Programs/Source/biometric_test.mpc
 SIZES_STR="${SIZES:-256}"        # comma-separated list of N=D sizes
 REPEAT="${REPEAT:-1}"                          # repetitions per (N,THREAD,PARTY)
 THREAD_SET_STR="${THREAD_SET:-1,2}"            # compute-thread counts to test
