@@ -1,31 +1,35 @@
 # biometric_test.mpc
 #
-# LITERAL mirror of the C frontend (tests/biometric/inputs/biometric.c).
-# Everything -- the running min_sum/min_idx update included -- lives inside
-# the outer template loop, exactly as in the C source:
+# Squared-Euclidean-distance biometric matching that mirrors the C frontend
+# (tests/biometric/inputs/biometric.c).
 #
-#   uint32_t min_sum = UINT32_MAX;                            // BEFORE outer
-#   uint32_t min_idx = 0;
+# Structure:
 #
-#   for (i = 0; i < N; ++i) {                                 // outer
+#   for (i = 0; i < N; ++i) {                    outer (THREADED + opt)
 #       uint32_t sum = 0;
-#       for (j = 0; j < D; ++j) {                             // inner
+#       for (j = 0; j < D; ++j) {                inner
 #           int32_t diff = S[i*D + j] - C[j];
 #           sum += diff * diff;
 #       }
-#       if (sum < min_sum) {                                  // INSIDE outer
-#           min_sum = sum;
-#           min_idx = i;
-#       }
+#       sums[i] = sum;
+#   }
+#
+#   // sequential argmin scan -- mirrors C's `if (sum < min_sum) { ... }`:
+#   min_sum = sums[0]; min_idx = 0;
+#   for (i = 1; i < N; ++i) {
+#       if (sums[i] < min_sum) { min_sum = sums[i]; min_idx = i; }
 #   }
 #   return min_idx + min_sum;
 #
-# Because the (min_sum, min_idx) update lives inside the outer body, this
-# version uses a SEQUENTIAL outer loop (`@for_range_opt`) -- multithreading
-# the outer would race on the shared min_sum / min_idx cells. THREADS is
-# accepted from the env (for compatibility with the test script) but has no
-# structural effect here. For a multithreaded variant of the same workload
-# see biometric_test_vec.mpc.
+# Why the argmin lives AFTER the parallel loop instead of inside the outer
+# body (as in the C source): MP-SPDZ's compiler hard-rejects writes to a
+# shared sint.Array cell from inside a multithreaded loop body
+# (`CompilerError: Direct memory writing prevented in threads`), to stop
+# us from silently producing a data race across tapes. So when the outer
+# is threaded (which is the whole point of having a THREADS sweep), the
+# running min_sum / min_idx update has to be hoisted out into a
+# sequential post-pass over sums[]. Each parallel iteration writes only
+# to its own sums[i] slot, which is race-free.
 #
 # Inputs:
 #   Party 0  ->  Player-Data/Input-P0-0  : probe vector C  (D values)
@@ -33,10 +37,10 @@
 #
 # Compile-time config (env vars):
 #   N        -- template count *and* dimension; the workload is square (N == D)
-#   THREADS  -- accepted for script compatibility; not used in this version
+#   THREADS  -- number of compute threads for the OUTER per-template loop
 
 from Compiler.types import sint, Array, cint, MultiArray
-from Compiler.library import for_range_opt, print_ln
+from Compiler.library import for_range_opt_multithread, for_range_opt, print_ln
 import os
 
 
@@ -49,7 +53,7 @@ def _get_int(name, default):
 
 # Square workload: N (templates) == D (dim) == _N
 _N = _get_int("N", 2048)
-THREADS = max(1, _get_int("THREADS", 1))    # accepted but unused (see header)
+THREADS = max(1, _get_int("THREADS", 1))
 
 N_TPL = _N
 D_DIM = _N
@@ -64,25 +68,22 @@ S = sint.Matrix(N_TPL, D_DIM)
 S.input_from(1)
 
 # ---------------------------------------------------------------------------
-# Initialise running argmin BEFORE the outer loop (mirrors the C
-# `min_sum = UINT32_MAX; min_idx = 0;`). UINT32_MAX literally is too small
-# in MP-SPDZ's 128-bit field -- C wraps mod 2^32, MP-SPDZ does not -- so we
-# use a value that is comfortably above any sum the workload can produce
-# (uint32 inputs, D <= 2^31  =>  per-template sum max ~ D * 2^64 << 2^96).
+# Per-template squared distances.
+#
+# `for_range_opt_multithread(THREADS, N_TPL)` splits [0, N) across THREADS
+# tapes (true OS-thread parallelism) and applies `for_range_opt`'s
+# auto-vectorization budget within each tape. Each iteration writes to its
+# own `sums[i]` slot, so there's no cross-tape write conflict.
+#
+# The inner loop uses the literal C `sum += diff*diff` shape backed by a
+# 1-element sint.Array, so each iteration reads then writes the same cell
+# (loop-carried dependency). That dependency keeps the inner loop scalar
+# (no SIMD batching), which matches the unvectorized C source structure.
 # ---------------------------------------------------------------------------
-INF = (1 << 100) - 1                  # ~ "+infinity" in our field
+sums = sint.Array(N_TPL)
 
-min_sum = sint.Array(1)
-min_idx = sint.Array(1)
-min_sum[0] = sint(INF)                # min_sum = UINT_MAX  (scaled up)
-min_idx[0] = sint(0)                  # min_idx = 0;
 
-# ---------------------------------------------------------------------------
-# Nested loop -- outer (sequential) over templates, inner over dimensions.
-# Every step inside, including the if (sum < min_sum) update, sits in the
-# nested body, exactly as in the C source.
-# ---------------------------------------------------------------------------
-@for_range_opt(N_TPL)
+@for_range_opt_multithread(THREADS, N_TPL)
 def _(i):
     sum_var = sint.Array(1)               # uint32_t sum;
     sum_var[0] = sint(0)                  # sum = 0;
@@ -92,17 +93,25 @@ def _(i):
         diff = S[i][j] - C[j]             # int32_t diff = S[i*D+j] - C[j];
         sum_var[0] = sum_var[0] + diff * diff   # sum += diff * diff;
 
-    # if (sum < min_sum) { min_sum = sum; min_idx = i; }
-    less = sum_var[0] < min_sum[0]                 # secret 0/1
-    min_sum[0] = less.if_else(sum_var[0], min_sum[0])
-    min_idx[0] = less.if_else(sint(i),    min_idx[0])
+    sums[i] = sum_var[0]                  # sums[i] = sum;
 
+
+# ---------------------------------------------------------------------------
+# Sequential argmin scan -- mirrors C's `if (sum < min_sum) { ... }` chain.
+# Hoisted out of the parallel body for race-safety (see header).
+# ---------------------------------------------------------------------------
+min_sum = sums[0]
+min_idx = sint(0)
+for i in range(1, N_TPL):
+    less = sums[i] < min_sum                     # secret 0/1
+    min_sum = less.if_else(sums[i], min_sum)
+    min_idx = less.if_else(sint(i), min_idx)
 
 # ---------------------------------------------------------------------------
 # Output: mirror the C frontend's `return min_idx + min_sum;`.
 # Stored in a cint Array so DCE doesn't drop the reveal.
 # ---------------------------------------------------------------------------
-result = min_sum[0] + min_idx[0]
+result = min_sum + min_idx
 y_open = Array(1, cint)
 y_open[0] = result.reveal()
 #print_ln('biometric result (min_idx + min_sum) = %s', y_open[0])
