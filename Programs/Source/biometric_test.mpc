@@ -3,10 +3,18 @@
 # Squared-Euclidean-distance biometric matching that mirrors the C frontend
 # (tests/biometric/inputs/biometric.c in the user's other SPDZ pipeline).
 #
-# For each template i in the database S (N rows of D values), compute:
-#       dist[i] = sum_{j=0..D-1} (S[i][j] - C[j])^2
-# then return:
-#       min_idx + min_sum                       (matches the C return value)
+# Structure -- a literal nested loop, just like the C code:
+#
+#   for (i = 0; i < N; ++i) {                                  outer (threaded)
+#       sum = 0;
+#       for (j = 0; j < D; ++j) {                              inner
+#           diff = S[i*D + j] - C[j];
+#           sum += diff * diff;
+#       }
+#       sums[i] = sum;
+#   }
+#   // then a sequential argmin pass over sums[0..N-1] -> (min_sum, min_idx)
+#   return min_idx + min_sum;
 #
 # Inputs:
 #   Party 0  ->  Player-Data/Input-P0-0  : probe vector C  (D values)
@@ -14,13 +22,10 @@
 #
 # Compile-time config (env vars):
 #   N        -- template count *and* dimension; the workload is square (N == D)
-#   THREADS  -- number of compute threads for the per-template inner loop
-#
-# This file is the MP-SPDZ counterpart of biometric.c + biometric_new.sh in
-# the user's parallel pipeline.
+#   THREADS  -- number of compute threads for the OUTER per-template loop
 
-from Compiler.types import sint, Array, cint, MultiArray
-from Compiler.library import for_range_multithread, print_ln
+from Compiler.types import sint, Array, cint, MultiArray, MemValue
+from Compiler.library import for_range_multithread, for_range_opt, print_ln
 from Compiler import util
 import os
 
@@ -49,39 +54,49 @@ S = sint.Matrix(N_TPL, D_DIM)
 S.input_from(1)
 
 # ---------------------------------------------------------------------------
-# Per-template squared distances (parallel across templates)
+# Nested loop: outer over templates (threaded), inner over dimensions.
 #
-#   diff = S[i][:] - C[:]
-#   sums[i] = <diff, diff>
+# The inner loop accumulates into a memory-backed sint register (`acc`)
+# because Python-closure variables don't carry across runtime loop
+# iterations -- each `@for_range_opt` iteration is a separate runtime
+# block, not a re-execution of the Python body. `MemValue` (or
+# equivalently a 1-element sint Array) gives us a load/store-able cell.
 #
-# get_part_vector(i, 1) returns the i-th row of S as a vectorized sint of
-# length D, which lets us do the whole inner loop as a single vectorized
-# subtract + dot_product instead of unrolling D scalar ops at compile time.
+# `@for_range_opt` is the inner loop: it runs at runtime (single bytecode
+# block, executed D times) and may auto-batch iterations for vectorization.
+# Use `@for_range(D_DIM)` instead if you want strictly scalar, no auto-vec.
 # ---------------------------------------------------------------------------
 sums = sint.Array(N_TPL)
 
 
 @for_range_multithread(THREADS, 1, N_TPL)
 def _(i):
-    diff = S.get_part_vector(i, 1) - C.get_vector()
-    sums[i] = sint.dot_product(diff, diff)
+    acc = MemValue(sint(0))           # uint32_t sum = 0;
+
+    @for_range_opt(D_DIM)
+    def _(j):
+        diff = S[i][j] - C[j]         # int32_t diff = S[i*D+j] - C[j];
+        acc.write(acc.read() + diff * diff)   # sum += diff * diff;
+
+    sums[i] = acc.read()              # store this template's sum
 
 
 # ---------------------------------------------------------------------------
-# Argmin via tree reduction over (sum, idx) pairs.
-# At each step we pick the pair with the smaller sum, dragging its index
-# along with it -- exactly mirroring the `if (sum < min_sum)` branch in C.
+# Sequential argmin scan -- mirrors C's `if (sum < min_sum) { ... }` chain.
+# Done as a Python-unrolled fold: a single left-to-right pass that, at each
+# step, replaces the running (min_sum, min_idx) with the current candidate
+# whenever `sums[i] < running_min`. This produces the same circuit shape as
+# the C scan (N-1 secret comparisons in series).
+#
+# (If you'd rather have logarithmic round depth, swap this for a
+#  util.tree_reduce -- same semantics, different round structure.)
 # ---------------------------------------------------------------------------
-def reduce_min(a, b):
-    a_sum, a_idx = a
-    b_sum, b_idx = b
-    less = a_sum < b_sum                          # secret 0/1
-    return (less.if_else(a_sum, b_sum),
-            less.if_else(a_idx, b_idx))
-
-
-pairs = [(sums[i], sint(i)) for i in range(N_TPL)]
-min_sum, min_idx = util.tree_reduce(reduce_min, pairs)
+min_sum = sums[0]
+min_idx = sint(0)
+for i in range(1, N_TPL):
+    less = sums[i] < min_sum                     # secret 0/1
+    min_sum = less.if_else(sums[i], min_sum)
+    min_idx = less.if_else(sint(i), min_idx)
 
 # ---------------------------------------------------------------------------
 # Output: mirror the C frontend's `return min_idx + min_sum;`.
