@@ -28,10 +28,10 @@ make -j "${JOBS}" mascot-party.x
 ########################################
 # Config (override with env vars)
 ########################################
-PROGRAM="${PROGRAM:-biometric_test_vec}"           # Programs/Source/biometric_test.mpc
-SIZES_STR="${SIZES:-256}"        # comma-separated list of N=D sizes
+PROGRAM="${PROGRAM:-biometric_test}"           # Programs/Source/biometric_test.mpc
+SIZES_STR="${SIZES:-1024,2048,4096,8192}"        # comma-separated list of N=D sizes
 REPEAT="${REPEAT:-1}"                          # repetitions per (N,THREAD,PARTY)
-THREAD_SET_STR="${THREAD_SET:-1,2}"            # compute-thread counts to test
+THREAD_SET_STR="${THREAD_SET:-1,2,4,8}"            # compute-thread counts to test
 PARTIES_STR="${PARTIES:-2}"                    # comma-separated, e.g. "2,3,4"
 
 # 128-bit prime
